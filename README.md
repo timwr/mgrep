@@ -1,4 +1,8 @@
 mgrep
 =====
 
-Mobile Grep
+Mobile grep - Coloured device log matching
+
+Usage:
+mgrep <packagename>
+
