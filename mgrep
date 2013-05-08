@@ -1,8 +1,10 @@
 #!/usr/bin/env python
 
 import sys
+import signal
 import re
 import subprocess
+import threading
 
 class bcolors:
     HEADER = '\033[95m'
@@ -12,6 +14,20 @@ class bcolors:
     FAIL = '\033[91m'
     ENDC = '\033[0m'
 
+colors = { 
+    re.compile('^E/'): bcolors.FAIL, 
+    re.compile('^W/'): bcolors.WARNING, 
+    re.compile('^I/'): bcolors.OKGREEN, 
+    re.compile('^D/'): bcolors.OKBLUE, 
+    re.compile('^V/'): bcolors.HEADER, 
+    re.compile('^.*?\] <Error>: '): bcolors.FAIL, 
+    re.compile('^.*?\] <Warning>: '): bcolors.WARNING, 
+    re.compile('^.*?\] <Info>: '): bcolors.OKGREEN, 
+    re.compile('^.*?\] <Debug>: '): bcolors.OKBLUE, 
+}
+
+logging = True
+color = None
 logbuf = None
 
 def striptag(line):
@@ -21,8 +37,8 @@ def striptag(line):
         return line[tag+2:]
     return line
 
-def printline(color, line):
-    printstring(color, line)
+def printline(line):
+    printstring(line)
     #global logbuf
     #if len(line) > 3800:
         #if logbuf == None:
@@ -37,43 +53,31 @@ def printline(color, line):
             #printstring(color, line)
 
     
-def printstring(color, line):
+def printstring(line):
+    global color
     if color is None:
         print line
     else:
         print color + line + bcolors.ENDC
 
 def outputline(line):
-    color = None
-    if line[0] == 'E':
-        color = bcolors.FAIL
-    elif line[0] == 'I':
-        color = bcolors.OKGREEN
-    elif line[0] == 'W':
-        color = bcolors.WARNING
-    elif line[0] == 'D':
-        color = bcolors.OKBLUE
-    printline(color, line)
+    global color
+    for c in colors:
+        if c.match(line):
+            color = colors[c]
+            break
+    printline(line)
 
-def mgrep(pstring):
-    regexes = []
-
-    if pstring != None:
-        p = subprocess.Popen(["adb", "shell", "ps"], stdout=subprocess.PIPE)
-        stdout = p.communicate()[0]
-        for line in stdout.splitlines():
-            pstable = line.split()
-            if pstring in pstable[-1]:
-                matchstring = '\((\s)*' + pstable[1] + '\):'
-                regexes += [re.compile(matchstring)]
-
-    p = subprocess.Popen(["adb", "logcat"], stdout=subprocess.PIPE)
-
-    while True:
+def logthread(cmd, regexes):
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+    while p.poll() is None and logging:
         try:
             line = p.stdout.readline().rstrip()
         except KeyboardInterrupt:
-            break
+            return
+
+        if line == None or len(line) <= 1:
+            continue
 
         if len(regexes) > 0:
             for reg in regexes:
@@ -83,6 +87,31 @@ def mgrep(pstring):
         else:
             outputline(line)
 
+def startlogging(cmd, regexes):
+    t = threading.Thread(target=logthread, args=(cmd,regexes,))
+    t.start()
+
+def signal_handler(signal, frame):
+    global logging
+    print 'Ctrl+C'
+    logging = False
+    sys.exit(0)
+
+def mgrep(pstring):
+    regexes = []
+    if pstring != None:
+        p = subprocess.Popen(["adb", "shell", "ps"], stdout=subprocess.PIPE)
+        stdout = p.communicate()[0]
+        for line in stdout.splitlines():
+            pstable = line.split()
+            if pstring in pstable[-1]:
+                matchstring = '\((\s)*' + pstable[1] + '\):'
+                regexes += [re.compile(matchstring)]
+
+    signal.signal(signal.SIGINT, signal_handler)
+    startlogging(["adb", "logcat"], regexes)
+    startlogging(["idevicesyslog"], [])
+    signal.pause()
 
 if __name__ == "__main__":
     grepstring = None
